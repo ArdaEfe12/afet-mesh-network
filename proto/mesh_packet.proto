@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package afet.mesh;
+
+// Hem Android (Kotlin) hem C# (.NET) tarafından derlenen ortak paket sözleşmesi.
+// Hedef: Minimum bayt, maksimum bilgi. Standart BLE MTU 23-27b, DLE ile 512b.
+
+// ─────────────────────────────────────────────────────────────────────
+// TEMEL SOS / MESH PAKETI
+// ─────────────────────────────────────────────────────────────────────
+message MeshPacket {
+
+  // ── Yönlendirme Başlığı (Ara düğümler tarafından okunabilir, açık) ──
+  Header header = 1;
+
+  // ── Şifreli Yük (Ara düğümler tarafından okunamaz - Curve25519 ECDH + XSalsa20-Poly1305) ──
+  bytes encrypted_payload = 2;
+
+  // ── Gönderenin Ed25519 imzası (Header + encrypted_payload üzerinden) ──
+  bytes signature = 3;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// YÖNLENDIRME BAŞLIĞI — TTL, Öncelik, Rota, Enkaz Tanımı
+// ─────────────────────────────────────────────────────────────────────
+message Header {
+
+  // 12 byte: Paketin evrensel benzersiz kimliği (deduplication için)
+  // Küçük tutulmuş: UUID'nin ilk 12 baytı, hex yerine binary.
+  bytes message_id = 1;
+
+  // Epoch saniye cinsinden zaman damgası (4 byte - uint32)
+  uint32 timestamp_epoch = 2;
+
+  // Kaç cihazdan daha atlanabilir? Her hop'ta 1 azalır. 0 ise düşürülür.
+  uint32 ttl = 3;
+
+  // Kaçıncı hop'tayız? (İzleme/analiz için)
+  uint32 hop_count = 4;
+
+  // Mesaj tipi / öncelik sınıfı
+  PacketType packet_type = 5;
+
+  // Paketi üreten cihazın Ed25519 Genel Anahtarı (32 byte)
+  bytes sender_public_key = 6;
+
+  // Kurtarma merkezinin Curve25519 Alıcı Genel Anahtarı (32 byte)
+  // (Bu anahtar ile encrypted_payload şifrelenmiştir)
+  bytes recipient_public_key = 7;
+
+  // Enkripteli yük boyutu (bytes cinsinden)
+  uint32 payload_length = 8;
+
+  // Paketin geçtiği cihazların kısa kimlikleri (sıçrama zinciri izleme, max 10x6=60 byte)
+  repeated bytes hop_trace = 9;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PAKET TİPİ / ÖNCELİK SINIFI
+// ─────────────────────────────────────────────────────────────────────
+enum PacketType {
+  UNKNOWN         = 0;
+  CRITICAL_SOS    = 1;  // Enkaz altı / Can tehlikesi — Asla düşürülmez (TTL yok sayılır)
+  MEDICAL_AID     = 2;  // Tıbbi yardım ihtiyacı
+  FAMILY_SAFE     = 3;  // "Güvendeyim" / Aile mesajı
+  RELAY_HEARTBEAT = 4;  // Kurye sağlık durumu telsiz pingleri
+  ACK_DELIVERED   = 5;  // Kurtarma merkezinden gelen "Ulaştı" teyidi
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ŞİFRELENMİŞ YÜK İÇİNDEKİ VERİ (Sadece kurtarma merkezi okuyabilir)
+// Bu mesaj Protobuf ile serileştirildikten sonra Curve25519 ile şifrelenir.
+// ─────────────────────────────────────────────────────────────────────
+message EmergencyPayload {
+
+  // ── Konum ──
+  // Enlem x 1e6 (ör. 41°01'30" N → 41001500)  — 4 byte int32, ~10cm hassasiyet
+  sint32 latitude_e6  = 1;
+  // Boylam x 1e6                               — 4 byte int32
+  sint32 longitude_e6 = 2;
+  // GPS hassasiyet yarıçapı (metre, 0-255)     — 1 byte
+  uint32 accuracy_m   = 3;
+  // Rakım (metre, -500 ile +8500)              — 2 byte int32
+  sint32 altitude_m   = 4;
+
+  // ── Durum Bitleri ──
+  bool   is_trapped     = 5;  // Enkaz altında / Çıkamıyor
+  bool   is_injured     = 6;  // En az 1 kişi yaralı
+  bool   is_conscious   = 7;  // Bilinç açık
+  uint32 people_count   = 8;  // Toplam kişi sayısı (0-15 → 4 bit, uint32 olarak saklı)
+  uint32 battery_pct    = 9;  // Pil yüzdesi %0-100
+
+  // ── Serbest Metin ──
+  // Max 64 UTF-8 byte (UTF-8 Türkçe karakterler için 1-2 byte/karakter)
+  string message_text   = 10;
+
+  // ── Tıbbi Acil ──
+  string blood_type     = 11; // "A+", "B-", "0+" vs. (max 3 char)
+  string medical_notes  = 12; // "Diyabetik, insülin gerekiyor" (max 48 byte)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ANTİ-ENTROPİ / ENVANTER TAKAS PAKETI
+// İki cihaz karşılaştığında önce sahip oldukları mesaj ID'lerini paylaşır.
+// Bu sayede sadece eksik olanlar aktarılır; gereksiz bant genişliği kullanılmaz.
+// ─────────────────────────────────────────────────────────────────────
+message AntiEntropyDigest {
+  // Cihazın sahip olduğu message_id'lerin kompakt listesi
+  // 12 byte × N ID = bant genişliği dostu envanter
+  repeated bytes known_message_ids = 1;
+
+  // Bu cihaz bir kurtarma merkezine bağlanabildi mi?
+  bool has_gateway_connection = 2;
+
+  // Bu digest'i gönderen cihazın kısa kimliği (6 byte)
+  bytes sender_node_id = 3;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ACK / TESLİMAT ONAY PAKETİ
+// Kurtarma merkezi paketi aldığında ağa geriye doğru yayar.
+// Ara cihazlar bu ID'yi görünce belleklerindeki kopyayı siler.
+// ─────────────────────────────────────────────────────────────────────
+message AckPacket {
+  // Hangi mesaj başarıyla teslim alındı?
+  bytes acked_message_id = 1;
+
+  // Kurtarma merkezinin kimliği (Gateway Node ID)
+  bytes gateway_node_id  = 2;
+
+  // Kaç cihaz zinciri üzerinden ulaştı? (İstatistik)
+  uint32 delivery_hop_count = 3;
+
+  // Kurtarma ekibinin tahmini varış zamanı (Unix epoch, 0 ise bilinmiyor)
+  uint32 estimated_rescue_epoch = 4;
+}

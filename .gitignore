@@ -1,0 +1,38 @@
+# Git ignore for Afet Mesh Network Project
+
+# Root and IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Android
+android-client/.gradle/
+android-client/**/build/
+android-client/local.properties
+android-client/.idea/
+android-client/**/*.iml
+android-client/captures/
+android-client/.externalNativeBuild/
+android-client/.cxx/
+*.apk
+*.aab
+
+# .NET / C# Gateway Server
+gateway-server/bin/
+gateway-server/obj/
+gateway-server/**/bin/
+gateway-server/**/obj/
+gateway-server/.vs/
+*.user
+*.suo
+*.userprefs
+
+# Logs and temps
+*.log
+scratch/
+tmp/

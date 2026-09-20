@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Afet ve Acil Durum "İnternetsiz Ağ" - Mesh Network Kuryesi</title>
+  <link rel="stylesheet" href="src/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Üst Başlık & Durum Çubuğu -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
+          <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/>
+          <circle cx="12" cy="12" r="2"/>
+          <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/>
+          <path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/>
+        </svg>
+      </div>
+      <div class="brand-title">
+        <h1>Afet Mesh Ağı & Kurye Sistemi (DMP)</h1>
+        <p>İnternetsiz & Hücresel Verisiz Cihazdan Cihaza (P2P BLE / Wi-Fi Aware) Mikro-Mesajlaşma</p>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 1rem; align-items: center;">
+      <div class="status-badge">
+        <span class="pulse-dot"></span>
+        <span>Mesh Aktif (0-İnternet P2P)</span>
+      </div>
+      <div class="sim-controls">
+        <button id="btnReset" class="btn-control" title="Simülasyonu Sıfırla">Sıfırla</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Ana Panel Düzeni -->
+  <main class="main-container">
+    
+    <!-- Sol Taraf: Canlı Ağ Simülasyon Haritası -->
+    <section class="sim-panel">
+      <div class="panel-header">
+        <h2>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
+            <line x1="8" y1="2" x2="8" y2="18"></line>
+            <line x1="16" y1="6" x2="16" y2="22"></line>
+          </svg>
+          Canlı Kapsama & Paket Sıçrama (Hop) Haritası
+        </h2>
+        <div style="display: flex; gap: 6px;">
+          <button id="btnAddCourier" class="btn-control">+ Kurye Ekle (Vatandaş)</button>
+          <button id="btnAddVictim" class="btn-control" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;">+ Enkaz Ekle</button>
+        </div>
+      </div>
+
+      <div class="canvas-container">
+        <canvas id="simCanvas"></canvas>
+      </div>
+
+      <!-- Açıklama / Legend -->
+      <div class="legend-bar">
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#ef4444; box-shadow:0 0 6px #ef4444;"></span>
+          <span>Enkaz Feneri (Kazazede BLE Sinyali)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#a855f7; box-shadow:0 0 6px #a855f7;"></span>
+          <span>Veri Kuryesi (Yürüyen Vatandaş / Dron)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#10b981; box-shadow:0 0 6px #10b981;"></span>
+          <span>Kurtarma / Uydu Merkezi (Sink Gateway)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#06b6d4; box-shadow:0 0 6px #06b6d4;"></span>
+          <span>P2P Paket Sıçraması (Hop)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sağ Taraf: İstatistikler, SOS Formu ve Kurtarma Paneli -->
+    <aside class="sidebar">
+      
+      <!-- Telemetri Sayaçları -->
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div id="statTotal" class="stat-value" style="color:var(--text-primary);">0</div>
+          <div class="stat-label">Üretilen SOS</div>
+        </div>
+        <div class="stat-box">
+          <div id="statHops" class="stat-value" style="color:var(--accent-cyan);">0</div>
+          <div class="stat-label">Toplam Sıçrama</div>
+        </div>
+        <div class="stat-box">
+          <div id="statDelivered" class="stat-value" style="color:var(--success-green);">0</div>
+          <div class="stat-label">Merkeze Ulaşan</div>
+        </div>
+      </div>
+
+      <!-- Kazazede Cihazından SOS Yayınlama Kartı -->
+      <div class="card">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #f87171; display:flex; align-items:center; gap:6px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          Kazazede SOS Yayını Başlat
+        </h3>
+
+        <div class="form-group">
+          <label for="sosMessage">Acil Durum Mesajı / Detay:</label>
+          <input type="text" id="sosMessage" class="form-input" value="Enkaz altındayız, 1 kişi bacağından yaralı!">
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.75rem;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label for="peopleCount">Kişi Sayısı:</label>
+            <select id="peopleCount" class="form-select">
+              <option value="1">1 Kişi</option>
+              <option value="2" selected>2 Kişi</option>
+              <option value="3">3 Kişi</option>
+              <option value="4">4+ Kişi</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0; display:flex; flex-direction:column; justify-content:flex-end;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" id="hasInjury" checked>
+              <span>Yaralı Var</span>
+            </label>
+          </div>
+        </div>
+
+        <button id="btnSendSos" class="btn-sos">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          ACİL SOS FENERİNİ BAŞLAT
+        </button>
+      </div>
+
+      <!-- Kurtarma Merkezi Gelen SOS Triage Listesi -->
+      <div class="card" style="flex: 1; display: flex; flex-direction: column;">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--success-green); display:flex; align-items:center; justify-content:space-between;">
+          <span>Kurtarma Merkezi Gelen Triage</span>
+          <span style="font-size:0.7rem; color:var(--text-muted);">AFAD Uydu Terminali</span>
+        </h3>
+        <div id="triageList" style="flex:1; max-height: 180px; overflow-y:auto;">
+          <div style="color:var(--text-muted); font-size:0.8rem; text-align:center; padding:1rem;">
+            Paketler kurye cihazlar aracılığıyla aktarılıyor...
+          </div>
+        </div>
+      </div>
+
+      <!-- Paket Formatı & Hex İnceleyici -->
+      <div class="card">
+        <h3 style="font-size: 0.85rem; margin-bottom: 0.5rem; color: var(--accent-cyan);">
+          BLE Paket Çerçevesi (Nano-Frame Byte Inspector)
+        </h3>
+        <div id="packetInspector">
+          <div style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">
+            Paket bekleniyor...
+          </div>
+        </div>
+      </div>
+
+      <!-- Canlı Olay Akışı (Log) -->
+      <div class="card" style="padding: 0.85rem;">
+        <h4 style="font-size: 0.75rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:0.4rem;">
+          Mesh Ağ Olay Günlüğü
+        </h4>
+        <div id="logFeed" class="feed-container"></div>
+      </div>
+
+    </aside>
+
+  </main>
+
+  <!-- Uygulama Giriş Scripti -->
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

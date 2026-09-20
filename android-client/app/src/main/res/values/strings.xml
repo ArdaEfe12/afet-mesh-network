@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Afet Mesh</string>
+    <string name="sos_active">SOS AKTİF</string>
+    <string name="sos_start">SOS BAŞLAT</string>
+    <string name="mesh_running">Mesh Ağı Aktif</string>
+</resources>

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Afet.Gateway</AssemblyName>
+    <RootNamespace>Afet.Gateway</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Protobuf ikili serileştirme (Android ↔ C# ortak sözleşme) -->
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Grpc.Tools" Version="2.69.0" PrivateAssets="All" />
+
+    <!-- Libsodium wrapper: Curve25519 ECDH + XSalsa20-Poly1305 şifre çözme -->
+    <PackageReference Include="Sodium.Core" Version="1.4.0" />
+  </ItemGroup>
+
+  <!-- Proto dosyası otomatik derleme (kod üretimi) -->
+  <ItemGroup>
+    <Protobuf Include="..\proto\mesh_packet.proto"
+              GrpcServices="None"
+              Access="Public"
+              ProtoCompile="True"
+              CompileOutputs="True"
+              OutputDir="obj\%(RelativeDir)"
+              Generator="MSBuild:Compile" />
+  </ItemGroup>
+
+</Project>
