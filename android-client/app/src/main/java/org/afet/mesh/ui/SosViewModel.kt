@@ -55,6 +55,12 @@ class SosViewModel @Inject constructor(
         .map { it.size }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
+    val nearbyEmergencies: StateFlow<List<org.afet.mesh.data.local.MessageEntity>> = messageDao.observeNearbyEmergencies()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val deviceModel: String =
+        "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}"
+
     init {
         startLocationUpdates()
         syncBattery()
@@ -83,12 +89,18 @@ class SosViewModel @Inject constructor(
         val lon = parts.getOrNull(1)?.trim()?.toDoubleOrNull() ?: 0.0
 
         val messageId = UUID.randomUUID().toString().replace("-", "").take(24)
-        val message = customMessage ?: "Enkaz altındayım, yardım gerekiyor!"
+        val message = customMessage ?: "🚨 Enkaz altındayım, yardım gerekiyor!"
 
-        // TODO: Aşama 2'de Protobuf serileştirme burada yapılacak
-        // Şimdilik JSON placeholder baytı oluştur
         val rawProto = buildString {
-            append("{\"type\":\"SOS\",\"msg\":\"$message\",\"lat\":$lat,\"lon\":$lon}")
+            append("{")
+            append("\"type\":\"SOS\",")
+            append("\"msg\":\"${message.replace("\"", "\\\"")}\",")
+            append("\"model\":\"${deviceModel.replace("\"", "\\\"")}\",")
+            append("\"lat\":$lat,")
+            append("\"lon\":$lon,")
+            append("\"senderId\":\"${nearbyManager.localNodeId}\",")
+            append("\"time\":${System.currentTimeMillis()}")
+            append("}")
         }.toByteArray()
 
         epidemicRouter.enqueueOwnSos(
@@ -96,10 +108,12 @@ class SosViewModel @Inject constructor(
             rawProtoBytes = rawProto,
             latitude = lat,
             longitude = lon,
-            senderId = nearbyManager.localNodeId
+            senderId = nearbyManager.localNodeId,
+            senderDeviceModel = deviceModel,
+            messageText = message
         )
 
-        Log.i("SosViewModel", "🚨 SOS kuyruğa eklendi: $messageId")
+        Log.i("SosViewModel", "🚨 SOS kuyruğa eklendi: $messageId ($deviceModel)")
     }
 
     private fun startLocationUpdates() {

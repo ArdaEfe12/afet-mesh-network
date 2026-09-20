@@ -56,6 +56,8 @@ fun SosDashboard(
     currentProfile: DutyCycleProfile,
     lastKnownLocation: String,   // "41.00823, 28.97845" formatında
     deliveredCount: Int,
+    nearbyEmergencies: List<org.afet.mesh.data.local.MessageEntity> = emptyList(),
+    localDeviceModel: String = "",
     onSosToggle: () -> Unit,
     onAddMessage: (String) -> Unit
 ) {
@@ -99,8 +101,17 @@ fun SosDashboard(
                 color = AfetColors.TextSecondary,
                 fontSize = 14.sp
             )
+            if (localDeviceModel.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Bu Cihaz: $localDeviceModel",
+                    color = AfetColors.TextMuted,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
             // ── Durum Kartları (Pil, Bağlı Cihaz, Kuyruk) ─────────
             Row(
@@ -327,6 +338,67 @@ fun SosDashboard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // ── ÇEVREDEKİ ACİL DURUMLAR & ALINAN CİHAZ MESAJLARI ───────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ÇEVREDEKİ ACİL DURUMLAR",
+                    color = if (nearbyEmergencies.isNotEmpty()) AfetColors.SosRed else AfetColors.TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.W700,
+                    letterSpacing = 1.sp
+                )
+                if (nearbyEmergencies.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(AfetColors.SosRedGlow)
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${nearbyEmergencies.size} CİHAZ",
+                            color = AfetColors.SosRed,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.W800
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (nearbyEmergencies.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(AfetColors.Surface, RoundedCornerShape(12.dp))
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Etrafta henüz başka bir cihazdan acil durum sinyali alınmadı.\nİkinci bir telefon yaklaştığında modeli ve konumu burada belirecektir.",
+                        color = AfetColors.TextMuted,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 18.sp
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    nearbyEmergencies.forEach { emergency ->
+                        EmergencyCard(emergency = emergency)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
             // ── Bilgilendirme Notu ──────────────────────────────────
             Text(
                 text = "Mesajınız yakınınızdan geçen cihazlar\naracılığıyla kurtarma merkezine ulaştırılır.",
@@ -405,3 +477,96 @@ private fun InfoCard(
         }
     }
 }
+
+// ── Çevredeki Acil Durum Kartı (Cihaz Modeli + Konum + Mesaj) ────────
+@Composable
+private fun EmergencyCard(emergency: org.afet.mesh.data.local.MessageEntity) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AfetColors.Surface, RoundedCornerShape(14.dp))
+            .border(1.dp, AfetColors.SosRed.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+            .padding(14.dp)
+    ) {
+        // Üst Satır: Model + Hop / Sıçrama rozeti
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = "📱", fontSize = 16.sp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = emergency.senderDeviceModel.ifBlank { "Bilinmeyen Cihaz (#${emergency.senderId.take(6)})" },
+                    color = AfetColors.TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.W700
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(AfetColors.SurfaceAlt)
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = if (emergency.hopCount <= 1) "📡 Doğrudan Alındı" else "⚡ ${emergency.hopCount}. Sıçrama",
+                    color = AfetColors.AccentBlue,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.W600
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Mesaj Metni
+        Text(
+            text = emergency.messageText.ifBlank { "🚨 Acil Durum / SOS Sinyali" },
+            color = AfetColors.SosRed,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.W700
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Konum ve Saat Bilgisi
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val locText = if (emergency.latitude != 0.0 || emergency.longitude != 0.0) {
+                "📍 %.5f, %.5f".format(emergency.latitude, emergency.longitude)
+            } else {
+                "📍 Konum bekleniyor"
+            }
+            Text(
+                text = locText,
+                color = AfetColors.ActiveGreen,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.W600
+            )
+
+            val timeAgo = calculateTimeAgo(emergency.receivedAtMs)
+            Text(
+                text = "⏱️ $timeAgo",
+                color = AfetColors.TextSecondary,
+                fontSize = 11.sp
+            )
+        }
+    }
+}
+
+private fun calculateTimeAgo(timestampMs: Long): String {
+    val diffSec = (System.currentTimeMillis() - timestampMs) / 1000
+    return when {
+        diffSec < 60 -> "Az önce"
+        diffSec < 3600 -> "${diffSec / 60} dk önce"
+        else -> "${diffSec / 3600} saat önce"
+    }
+}
+

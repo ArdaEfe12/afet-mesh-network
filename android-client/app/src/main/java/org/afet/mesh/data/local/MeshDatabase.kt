@@ -7,7 +7,7 @@ import android.content.Context
 
 @Database(
     entities = [MessageEntity::class, SeenPacketEntity::class, PeerEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class MeshDatabase : RoomDatabase() {

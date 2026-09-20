@@ -82,7 +82,9 @@ class EpidemicRouter @Inject constructor(
         latitude: Double,
         longitude: Double,
         senderId: String,
-        timestampEpoch: Long
+        timestampEpoch: Long,
+        senderDeviceModel: String = "",
+        messageText: String = ""
     ): Boolean {
         // 1. Deduplication — Bu paketi daha önce gördük mü?
         if (seenPacketDao.hasSeen(messageId) > 0) {
@@ -101,7 +103,7 @@ class EpidemicRouter @Inject constructor(
 
         val finalTtl = maxOf(0, newTtl)
 
-        // 3. Room DB'ye kayıt
+        // 3. Room DB'ye kayıt (isSelf = false çünkü dışarıdan geldi)
         val entity = MessageEntity(
             messageId = messageId,
             rawProtoBytes = rawProtoBytes,
@@ -111,14 +113,17 @@ class EpidemicRouter @Inject constructor(
             latitude = latitude,
             longitude = longitude,
             senderId = senderId,
-            timestampEpoch = timestampEpoch
+            timestampEpoch = timestampEpoch,
+            senderDeviceModel = senderDeviceModel,
+            messageText = messageText,
+            isSelf = false
         )
         messageDao.insertMessage(entity)
 
         // 4. Seen-set güncelle
         markSeen(messageId)
 
-        Log.i(TAG, "✅ Paket alındı ve kuyruğa eklendi: $messageId (TTL=$finalTtl, Hop=${hopCount + 1})")
+        Log.i(TAG, "✅ Paket alındı ve kuyruğa eklendi: $messageId (Model=$senderDeviceModel, Mesaj=$messageText, Hop=${hopCount + 1})")
         return true
     }
 
@@ -139,6 +144,8 @@ class EpidemicRouter @Inject constructor(
         latitude: Double,
         longitude: Double,
         senderId: String,
+        senderDeviceModel: String = "",
+        messageText: String = "",
         ttl: Int = 12
     ) {
         val entity = MessageEntity(
@@ -150,11 +157,14 @@ class EpidemicRouter @Inject constructor(
             latitude = latitude,
             longitude = longitude,
             senderId = senderId,
-            timestampEpoch = System.currentTimeMillis() / 1000
+            timestampEpoch = System.currentTimeMillis() / 1000,
+            senderDeviceModel = senderDeviceModel,
+            messageText = messageText,
+            isSelf = true
         )
         messageDao.insertMessage(entity)
         markSeen(messageId) // Kendi paketimizi gördüğümüzü kaydet
-        Log.i(TAG, "🚨 Kendi SOS paketimiz kuyruğa eklendi: $messageId")
+        Log.i(TAG, "🚨 Kendi SOS paketimiz kuyruğa eklendi: $messageId ($senderDeviceModel)")
     }
 
     /**

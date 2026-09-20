@@ -37,6 +37,7 @@ class SosDashboardActivity : ComponentActivity() {
             val profile by viewModel.currentProfile.collectAsState()
             val location by viewModel.lastKnownLocation.collectAsState()
             val delivered by viewModel.deliveredCount.collectAsState()
+            val nearbyEmergencies by viewModel.nearbyEmergencies.collectAsState()
 
             SosDashboard(
                 isSosActive = isSosActive,
@@ -46,6 +47,8 @@ class SosDashboardActivity : ComponentActivity() {
                 currentProfile = profile,
                 lastKnownLocation = location,
                 deliveredCount = delivered,
+                nearbyEmergencies = nearbyEmergencies,
+                localDeviceModel = viewModel.deviceModel,
                 onSosToggle = { viewModel.toggleSos() },
                 onAddMessage = { viewModel.addCustomMessage(it) }
             )

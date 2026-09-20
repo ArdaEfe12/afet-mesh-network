@@ -65,7 +65,19 @@ data class MessageEntity(
 
     /** Paket ACK paketi ile doğrulanmış mı? Evet ise silinmeye hazır. */
     @ColumnInfo(name = "is_acked")
-    val isAcked: Boolean = false
+    val isAcked: Boolean = false,
+
+    /** Paketi gönderen cihazın marka ve modeli (örn: "Vivo V29", "Samsung Galaxy S23"). */
+    @ColumnInfo(name = "sender_device_model", defaultValue = "''")
+    val senderDeviceModel: String = "",
+
+    /** Gönderilen açık durum mesajı (örn: "Enkaz Altındayım", "Kat 3 merdivenler"). */
+    @ColumnInfo(name = "message_text", defaultValue = "''")
+    val messageText: String = "",
+
+    /** Bu mesaj bu cihazın kendi ürettiği mesaj mı? (false ise çevreden/mesh'ten alınmıştır) */
+    @ColumnInfo(name = "is_self", defaultValue = "0")
+    val isSelf: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean =
         other is MessageEntity && messageId == other.messageId
@@ -124,5 +136,13 @@ data class PeerEntity(
 
     /** Bu cihaz ile en son senkronize edilen mesaj kimliği. */
     @ColumnInfo(name = "last_synced_message_id")
-    val lastSyncedMessageId: String? = null
+    val lastSyncedMessageId: String? = null,
+
+    /** Keşfedilen cihazın marka/modeli (örn: "Vivo V29"). */
+    @ColumnInfo(name = "device_model", defaultValue = "''")
+    val deviceModel: String = "",
+
+    /** Endpoint veya yayın adı. */
+    @ColumnInfo(name = "device_name", defaultValue = "''")
+    val deviceName: String = ""
 )

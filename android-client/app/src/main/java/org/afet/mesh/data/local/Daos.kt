@@ -31,6 +31,16 @@ interface MessageDao {
     fun observePendingMessages(): Flow<List<MessageEntity>>
 
     /**
+     * Çevredeki diğer cihazlardan (mesh üzerinden) alınan acil durum mesajlarını gözlemle.
+     */
+    @Query("""
+        SELECT * FROM pending_messages
+        WHERE is_self = 0
+        ORDER BY received_at_ms DESC
+    """)
+    fun observeNearbyEmergencies(): Flow<List<MessageEntity>>
+
+    /**
      * Karşı cihaza aktarılacak paketleri belirle.
      * Karşı cihazın bilmediği (listede olmayan ID'ler) ve TTL > 0 olanlar.
      * Limit: Tek bir karşılaşmada en fazla 5 paket aktar (BLE bant genişliği koruması).
