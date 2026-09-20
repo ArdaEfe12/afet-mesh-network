@@ -67,7 +67,11 @@ class DutyCycleManager @Inject constructor(
 
     fun start() {
         acquireWakeLock()
-        context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        try {
+            context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        } catch (e: Exception) {
+            Log.w(TAG, "Pil dinleyicisi kayıt uyarısı: ${e.message}")
+        }
         currentProfile = selectProfile(currentBatteryPct)
         startDutyCycle()
         Log.i(TAG, "DutyCycleManager başlatıldı. İlk profil: ${currentProfile.name}")
@@ -83,9 +87,8 @@ class DutyCycleManager @Inject constructor(
     private fun startDutyCycle() {
         cycleJob?.cancel()
         cycleJob = scope.launch {
-            Log.i(TAG, "▶ Mesh antenleri aktif ediliyor (Advertising + Discovery): ${currentProfile.name}")
-            nearbyManager.startAdvertising()
-            nearbyManager.startDiscovery()
+            Log.i(TAG, "▶ Mesh antenleri aktif ediliyor (Advertising + Discovery + Sync): ${currentProfile.name}")
+            nearbyManager.startMesh()
         }
     }
 

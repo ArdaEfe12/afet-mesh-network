@@ -9,10 +9,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.tasks.await
 import org.afet.mesh.data.local.PeerDao
 import org.afet.mesh.data.local.PeerEntity
 import org.afet.mesh.mesh.routing.EpidemicRouter
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -22,13 +23,13 @@ import javax.inject.Singleton
  *
  * Bu sınıf:
  *  1. BLE Advertising (Yayın) ve BLE Discovery (Tarama) döngüsünü yönetir
- *  2. İki cihaz kapsama alanına girince otomatik bağlantı kurar
- *  3. Anti-Entropy Digest takası yapar
- *  4. Karşı cihazın bilmediği paketleri aktarır (Epidemic Sync)
- *  5. Bağlantı bitince kaynakları serbest bırakır (Pil tasarrufu)
+ *  2. İki cihaz kapsama alanına girince çakışmasız (tie-breaker) otomatik bağlantı kurar
+ *  3. Yeni bağlanan cihaza bekleyen acil durum paketlerini derhal gönderir
+ *  4. Anti-Entropy Digest takası ve periyodik senkronizasyon yapar
+ *  5. Alınan paketleri Room DB'ye yazar ve yüksek öncelikli Acil Durum Bildirimi fırlatır
+ *  6. Mesh Gossip: Paketi diğer komşu cihazlara ileterek ağ boyunca yayar
  *
  * Strateji: P2P_CLUSTER — Her cihaz hem Advertiser hem Discoverer.
- * Gerçek dünya: BLE keşif ≤ 15m, Wi-Fi Direct aktarım ≤ 80m
  * ═══════════════════════════════════════════════════════════════════════
  */
 @Singleton
@@ -39,24 +40,33 @@ class NearbyConnectionsManager @Inject constructor(
 ) {
     companion object {
         private const val TAG = "NearbyConnMgr"
-        /** SERVICE_ID — Afet Mesh uygulamasına ait unique kimlik. */
-        private const val SERVICE_ID = "org.afet.mesh.DISASTER_MESH_V1"
+        /** SERVICE_ID — Her iki cihazda da eşleşen standart servis kimliği. */
+        private const val SERVICE_ID = "org.afet.mesh"
         /** Her bir karşılaşmada aktarılacak maksimum paket sayısı. */
-        private const val MAX_PACKETS_PER_ENCOUNTER = 5
+        private const val MAX_PACKETS_PER_ENCOUNTER = 10
     }
 
-    // Cihazın kendine ait kısa Node ID (ısı yönetimi ve deduplication için)
+    // Cihazın kendine ait kısa Node ID'si
     var localNodeId: String = generateShortNodeId()
         private set
 
     val deviceModelName: String =
         "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}"
-    val endpointDisplayName: String = "$deviceModelName ($localNodeId)"
 
-    // Aktif bağlantılar: endpointId → PeerEntity
-    private val activeConnections = mutableMapOf<String, PeerEntity>()
-    private val pendingEndpointNames = mutableMapOf<String, String>()
+    // BLE reklam paketi boyutuna sığması için en fazla 32 karakter
+    val endpointDisplayName: String = "$deviceModelName ($localNodeId)".take(32)
+
+    // Aktif ve süreçteki bağlantıların güvenli takibi
+    private val activeConnections = ConcurrentHashMap<String, PeerEntity>()
+    private val pendingEndpointNames = ConcurrentHashMap<String, String>()
+    private val connectingEndpoints = ConcurrentHashMap.newKeySet<String>()
+    private val discoveredEndpoints = ConcurrentHashMap<String, Long>()
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var periodicSyncJob: Job? = null
+
+    private var isAdvertising = false
+    private var isDiscovering = false
 
     // Bağlı endpoint sayısının reaktif akışı (UI için)
     private val _connectedPeerCount = MutableStateFlow(0)
@@ -68,15 +78,23 @@ class NearbyConnectionsManager @Inject constructor(
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
             Log.i(TAG, "🔗 Bağlantı başlatıldı: $endpointId (${info.endpointName})")
             pendingEndpointNames[endpointId] = info.endpointName
-            // Güven kararı vermeden hemen kabul et (Afet ortamı: açık ağ)
+
+            // Afet anında güvenlik şifresi bekletmeden hemen kabul et
             Nearby.getConnectionsClient(context)
                 .acceptConnection(endpointId, payloadCallback)
+                .addOnSuccessListener {
+                    Log.i(TAG, "Bağlantı kabul edildi -> $endpointId")
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "Bağlantı kabul başarısız ($endpointId): ${e.message}")
+                    connectingEndpoints.remove(endpointId)
+                }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
+            connectingEndpoints.remove(endpointId)
             when (result.status.statusCode) {
                 ConnectionsStatusCodes.STATUS_OK -> {
-                    Log.i(TAG, "✅ Bağlantı kuruldu: $endpointId")
                     val epName = pendingEndpointNames.remove(endpointId) ?: ""
                     val model = parseDeviceModel(epName)
                     val peer = PeerEntity(
@@ -88,14 +106,22 @@ class NearbyConnectionsManager @Inject constructor(
                     )
                     activeConnections[endpointId] = peer
                     _connectedPeerCount.value = activeConnections.size
+                    Log.i(TAG, "✅ BAĞLANTI KURULDU: $endpointId ($epName) — Toplam aktif bağlı: ${activeConnections.size}")
 
-                    // Bağlantı kurulur kurulmaz Anti-Entropy Sync başlat
-                    scope.launch { performAntiEntropySync(endpointId) }
+                    // 1. Yeni bağlanan cihaza elimizdeki acil durum paketlerini anında doğrudan aktar
+                    scope.launch {
+                        sendAllPendingDirectly(endpointId)
+                        performAntiEntropySync(endpointId)
+                    }
 
                     scope.launch { peerDao.upsertPeer(peer) }
                 }
+                ConnectionsStatusCodes.STATUS_ALREADY_CONNECTED_TO_ENDPOINT -> {
+                    Log.i(TAG, "Zaten bağlı: $endpointId")
+                }
                 else -> {
-                    Log.w(TAG, "Bağlantı başarısız: $endpointId — ${result.status}")
+                    val statusStr = ConnectionsStatusCodes.getStatusCodeString(result.status.statusCode)
+                    Log.w(TAG, "Bağlantı kurulamadı: $endpointId — $statusStr (${result.status.statusCode})")
                     pendingEndpointNames.remove(endpointId)
                 }
             }
@@ -104,6 +130,7 @@ class NearbyConnectionsManager @Inject constructor(
         override fun onDisconnected(endpointId: String) {
             Log.i(TAG, "🔌 Bağlantı kesildi: $endpointId")
             activeConnections.remove(endpointId)
+            connectingEndpoints.remove(endpointId)
             _connectedPeerCount.value = activeConnections.size
         }
     }
@@ -122,93 +149,188 @@ class NearbyConnectionsManager @Inject constructor(
 
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
             if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
-                Log.d(TAG, "Payload aktarımı tamamlandı → $endpointId")
                 scope.launch { peerDao.incrementExchangeCount(endpointId) }
             }
         }
     }
 
-    // ── Reklam (Advertising) Başlat ──────────────────────────────────
+    // ── Keşif Callback ────────────────────────────────────────────────
+    private val discoveryCallback = object : EndpointDiscoveryCallback() {
+        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+            Log.i(TAG, "🔍 Yakın cihaz bulundu: $endpointId (${info.endpointName})")
+            val parsedModel = parseDeviceModel(info.endpointName)
+            scope.launch {
+                peerDao.upsertPeer(
+                    PeerEntity(
+                        endpointId = endpointId,
+                        nodeId = extractNodeIdFromEndpointName(info.endpointName),
+                        role = "COURIER",
+                        deviceModel = parsedModel,
+                        deviceName = info.endpointName
+                    )
+                )
+            }
+
+            if (activeConnections.containsKey(endpointId) || connectingEndpoints.contains(endpointId)) {
+                return
+            }
+
+            val myName = endpointDisplayName
+            val otherName = info.endpointName
+            discoveredEndpoints[endpointId] = System.currentTimeMillis()
+
+            // ── Çakışma Önleyici Tie-Breaker ──
+            // İki cihaz aynı anda keşfettiğinde ikisinin de aynı anda requestConnection()
+            // çağırması Google Play Services'de çarpışmaya (STATUS_CONNECTION_REJECTED) yol açar.
+            // Bu nedenle alfabetik olarak büyük olan taraf istek başlatır, küçük olan dinler.
+            if (myName > otherName) {
+                Log.i(TAG, "👑 Bağlantı inisiyatifi bizde ($myName > $otherName) → İstek gönderiliyor: $endpointId")
+                connectingEndpoints.add(endpointId)
+                Nearby.getConnectionsClient(context).requestConnection(
+                    endpointDisplayName,
+                    endpointId,
+                    connectionLifecycleCallback
+                ).addOnFailureListener { e ->
+                    Log.w(TAG, "requestConnection başarısız ($endpointId): ${e.message}")
+                    connectingEndpoints.remove(endpointId)
+                }
+            } else {
+                Log.i(TAG, "⏳ Karşı cihazın bağlanması bekleniyor ($myName <= $otherName) → $endpointId")
+                // Fallback: 4 saniye içinde karşıdan bağlantı gelmezse biz deneriz
+                scope.launch {
+                    delay(4000)
+                    if (!activeConnections.containsKey(endpointId) && connectingEndpoints.add(endpointId)) {
+                        Log.i(TAG, "⏱️ Fallback süresi doldu, biz bağlanıyoruz: $endpointId")
+                        Nearby.getConnectionsClient(context).requestConnection(
+                            endpointDisplayName,
+                            endpointId,
+                            connectionLifecycleCallback
+                        ).addOnFailureListener {
+                            connectingEndpoints.remove(endpointId)
+                        }
+                    }
+                }
+            }
+        }
+
+        override fun onEndpointLost(endpointId: String) {
+            Log.d(TAG, "Cihaz kapsama dışına çıktı: $endpointId")
+            discoveredEndpoints.remove(endpointId)
+            connectingEndpoints.remove(endpointId)
+        }
+    }
+
+    // ── Mesh Başlatma ve Yönetimi ────────────────────────────────────
+    fun startMesh() {
+        Log.i(TAG, "▶ startMesh() çağrıldı: Radyolar ve periyodik senkronizasyon başlatılıyor...")
+        startAdvertising()
+        startDiscovery()
+        startPeriodicSync()
+    }
+
     fun startAdvertising() {
+        if (isAdvertising) return
         val advertisingOptions = AdvertisingOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
 
         Nearby.getConnectionsClient(context).startAdvertising(
-            endpointDisplayName, // Model ve kısa ID
+            endpointDisplayName,
             SERVICE_ID,
             connectionLifecycleCallback,
             advertisingOptions
         ).addOnSuccessListener {
+            isAdvertising = true
             Log.i(TAG, "📡 BLE Advertising başladı: $endpointDisplayName")
         }.addOnFailureListener { e ->
             Log.e(TAG, "Advertising başlatılamadı: ${e.message}")
+            if (e is com.google.android.gms.common.api.ApiException &&
+                e.statusCode == ConnectionsStatusCodes.STATUS_ALREADY_ADVERTISING) {
+                isAdvertising = true
+            }
         }
     }
 
-    // ── Keşif (Discovery) Başlat ──────────────────────────────────────
     fun startDiscovery() {
+        if (isDiscovering) return
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
 
         Nearby.getConnectionsClient(context).startDiscovery(
             SERVICE_ID,
-            object : EndpointDiscoveryCallback() {
-                override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-                    Log.i(TAG, "🔍 Yakın cihaz bulundu: $endpointId (${info.endpointName})")
-                    val parsedModel = parseDeviceModel(info.endpointName)
-                    scope.launch {
-                        peerDao.upsertPeer(
-                            PeerEntity(
-                                endpointId = endpointId,
-                                nodeId = extractNodeIdFromEndpointName(info.endpointName),
-                                role = "COURIER",
-                                deviceModel = parsedModel,
-                                deviceName = info.endpointName
-                            )
-                        )
-                    }
-                    // Bağlantı isteği gönder
-                    Nearby.getConnectionsClient(context).requestConnection(
-                        endpointDisplayName,
-                        endpointId,
-                        connectionLifecycleCallback
-                    )
-                }
-
-                override fun onEndpointLost(endpointId: String) {
-                    Log.d(TAG, "Cihaz kapsama dışına çıktı: $endpointId")
-                }
-            },
+            discoveryCallback,
             discoveryOptions
         ).addOnSuccessListener {
+            isDiscovering = true
             Log.i(TAG, "🔍 BLE Discovery başladı")
         }.addOnFailureListener { e ->
             Log.e(TAG, "Discovery başlatılamadı: ${e.message}")
+            if (e is com.google.android.gms.common.api.ApiException &&
+                e.statusCode == ConnectionsStatusCodes.STATUS_ALREADY_DISCOVERING) {
+                isDiscovering = true
+            }
+        }
+    }
+
+    // ── Anında Paket Yayınlama (Broadcast) ─────────────────────────────
+    fun broadcastPacket(messageId: String, rawProtoBytes: ByteArray) {
+        val envelope = buildPacketEnvelope(messageId, rawProtoBytes)
+        val peers = activeConnections.keys.toList()
+        Log.i(TAG, "📡 broadcastPacket: $messageId -> ${peers.size} bağlı komşuya anında fırlatılıyor")
+        for (endpointId in peers) {
+            sendBytesToEndpoint(endpointId, envelope)
+        }
+    }
+
+    // ── Yeni Bağlantıya Bekleyen Tüm Paketleri Doğrudan Aktar ─────────
+    private suspend fun sendAllPendingDirectly(endpointId: String) {
+        try {
+            val pending = epidemicRouter.getAllPendingPackets()
+            if (pending.isNotEmpty()) {
+                Log.i(TAG, "🚀 Yeni bağlı $endpointId cihazına bekleyen ${pending.size} paket aktarılıyor")
+                for (packet in pending) {
+                    val envelope = buildPacketEnvelope(packet.messageId, packet.rawProtoBytes)
+                    sendBytesToEndpoint(endpointId, envelope)
+                    delay(80)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "sendAllPendingDirectly hatası: ${e.message}")
+        }
+    }
+
+    // ── Periyodik Senkronizasyon Döngüsü ──────────────────────────────
+    private fun startPeriodicSync() {
+        if (periodicSyncJob?.isActive == true) return
+        periodicSyncJob = scope.launch {
+            while (isActive) {
+                delay(3000)
+                if (activeConnections.isNotEmpty()) {
+                    for (endpointId in activeConnections.keys.toList()) {
+                        performAntiEntropySync(endpointId)
+                    }
+                }
+            }
         }
     }
 
     // ── Anti-Entropy Senkronizasyonu ──────────────────────────────────
     private suspend fun performAntiEntropySync(endpointId: String) {
-        val myInventory = epidemicRouter.getLocalInventory()
-
-        val digestJson = buildString {
-            append("{\"type\":\"DIGEST\",\"nodeId\":\"$localNodeId\",\"ids\":[")
-            append(myInventory.joinToString(",") { "\"$it\"" })
-            append("]}")
+        try {
+            val myInventory = epidemicRouter.getLocalInventory()
+            val digestJson = buildString {
+                append("{\"type\":\"DIGEST\",\"nodeId\":\"$localNodeId\",\"ids\":[")
+                append(myInventory.joinToString(",") { "\"$it\"" })
+                append("]}")
+            }
+            sendBytesToEndpoint(endpointId, digestJson.toByteArray())
+        } catch (e: Exception) {
+            Log.w(TAG, "performAntiEntropySync hatası ($endpointId): ${e.message}")
         }
-
-        sendBytesToEndpoint(endpointId, digestJson.toByteArray())
-        Log.d(TAG, "Anti-Entropy Digest gönderildi → $endpointId (${myInventory.size} ID)")
     }
 
-    /**
-     * Gelen ham veriyi işle:
-     * - DIGEST mesajı ise → karşı cihazın bilmediği paketleri gönder
-     * - PACKET mesajı ise → aç, modeli ve konumu oku, EpidemicRouter'a ve Room'a yaz
-     * - ACK mesajı ise → teslimat kaydı güncelle
-     */
+    // ── Gelen Veriyi Güvenle İşle ─────────────────────────────────────
     private suspend fun handleIncomingPayload(endpointId: String, bytes: ByteArray) {
         val text = bytes.decodeToString()
 
@@ -217,30 +339,49 @@ class NearbyConnectionsManager @Inject constructor(
                 val peerIds = parseDigestIds(text)
                 val packetsToSend = epidemicRouter.getPacketsToSendToPeer(peerIds)
 
-                Log.d(TAG, "← Digest alındı: ${peerIds.size} ID | Göndereceğim: ${packetsToSend.size} paket")
+                Log.d(TAG, "← Digest alındı ($endpointId): ${peerIds.size} ID biliniyor | Gönderilecek: ${packetsToSend.size} paket")
 
                 for (packet in packetsToSend.take(MAX_PACKETS_PER_ENCOUNTER)) {
                     val envelope = buildPacketEnvelope(packet.messageId, packet.rawProtoBytes)
                     sendBytesToEndpoint(endpointId, envelope)
-                    delay(50)
+                    delay(80)
                 }
             }
 
             text.startsWith("{\"type\":\"PACKET\"") -> {
-                Log.i(TAG, "← Paket alındı: ${bytes.size} byte")
+                Log.i(TAG, "← Paket alındı: ${bytes.size} byte ($endpointId)")
                 val newlineIdx = bytes.indexOf('\n'.code.toByte())
                 if (newlineIdx != -1) {
                     val headerJson = bytes.copyOfRange(0, newlineIdx).decodeToString()
                     val payloadBytes = bytes.copyOfRange(newlineIdx + 1, bytes.size)
                     val payloadStr = payloadBytes.decodeToString()
 
-                    val msgId = parseJsonField(headerJson, "id") ?: java.util.UUID.randomUUID().toString().replace("-", "").take(24)
-                    val msg = parseJsonField(payloadStr, "msg") ?: "Acil Durum / SOS"
-                    val model = parseJsonField(payloadStr, "model") ?: parseDeviceModel(activeConnections[endpointId]?.deviceName ?: "Bilinmeyen Cihaz")
-                    val senderId = parseJsonField(payloadStr, "senderId") ?: extractNodeIdFromEndpointName(endpointId)
-                    val lat = parseJsonDouble(payloadStr, "lat") ?: 0.0
-                    val lon = parseJsonDouble(payloadStr, "lon") ?: 0.0
-                    val time = parseJsonLong(payloadStr, "time") ?: System.currentTimeMillis()
+                    var msgId = parseHeaderId(headerJson)
+                    var msg = "Acil Durum / SOS"
+                    var model = activeConnections[endpointId]?.deviceModel ?: "Bilinmeyen Cihaz"
+                    var senderId = extractNodeIdFromEndpointName(endpointId)
+                    var lat = 0.0
+                    var lon = 0.0
+                    var time = System.currentTimeMillis()
+
+                    try {
+                        val json = JSONObject(payloadStr)
+                        val jMsg = json.optString("msg", "")
+                        if (jMsg.isNotBlank()) msg = jMsg
+                        val jModel = json.optString("model", "")
+                        if (jModel.isNotBlank()) model = jModel
+                        val jSender = json.optString("senderId", "")
+                        if (jSender.isNotBlank()) senderId = jSender
+                        lat = json.optDouble("lat", 0.0)
+                        lon = json.optDouble("lon", 0.0)
+                        time = json.optLong("time", time)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "JSON ayrıştırma uyarısı: ${e.message}")
+                    }
+
+                    if (msgId.isBlank()) {
+                        msgId = java.util.UUID.randomUUID().toString().replace("-", "").take(24)
+                    }
 
                     val isNew = epidemicRouter.receivePacket(
                         messageId = msgId,
@@ -257,7 +398,15 @@ class NearbyConnectionsManager @Inject constructor(
                     )
 
                     if (isNew) {
+                        Log.i(TAG, "🚨 YENİ ACİL DURUM ALINDI! Model=$model, Mesaj=$msg, Konum=$lat,$lon")
                         showEmergencyNotification(model, msg, lat, lon)
+
+                        // Karşıya derhal teslim edildi teyidi (ACK) gönder
+                        val ackJson = "{\"type\":\"ACK\",\"ackedId\":\"$msgId\"}"
+                        sendBytesToEndpoint(endpointId, ackJson.toByteArray())
+
+                        // Epidemic Mesh Gossip: Bu paketi ağdaki diğer tüm komşulara ilet!
+                        forwardToOtherPeers(endpointId, bytes)
                     }
                 }
             }
@@ -271,11 +420,28 @@ class NearbyConnectionsManager @Inject constructor(
         }
     }
 
-    // ── Yardımcı Metotlar ─────────────────────────────────────────────
+    private fun forwardToOtherPeers(incomingEndpointId: String, packetBytes: ByteArray) {
+        val otherPeers = activeConnections.keys.filter { it != incomingEndpointId }
+        if (otherPeers.isNotEmpty()) {
+            Log.i(TAG, "Mesh Gossip: Paket diğer ${otherPeers.size} bağlı cihaza aktarılıyor...")
+            for (peerId in otherPeers) {
+                sendBytesToEndpoint(peerId, packetBytes)
+            }
+        }
+    }
+
+    // ── Yardımcı İletişim Metotları ───────────────────────────────────
 
     private fun sendBytesToEndpoint(endpointId: String, bytes: ByteArray) {
-        Nearby.getConnectionsClient(context)
-            .sendPayload(endpointId, Payload.fromBytes(bytes))
+        try {
+            Nearby.getConnectionsClient(context)
+                .sendPayload(endpointId, Payload.fromBytes(bytes))
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "Payload gönderme hatası ($endpointId): ${e.message}")
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "sendBytesToEndpoint istisnası: ${e.message}")
+        }
     }
 
     private fun buildPacketEnvelope(messageId: String, rawProto: ByteArray): ByteArray {
@@ -283,62 +449,35 @@ class NearbyConnectionsManager @Inject constructor(
         return prefix + rawProto
     }
 
+    private fun parseHeaderId(headerJson: String): String {
+        return try {
+            JSONObject(headerJson).optString("id", "")
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     private fun parseDigestIds(json: String): List<String> {
-        val idsStart = json.indexOf("\"ids\":[") + 7
-        val idsEnd = json.lastIndexOf("]")
-        if (idsStart < 7 || idsEnd < 0) return emptyList()
-        val idsStr = json.substring(idsStart, idsEnd)
-        return idsStr.split(",").map { it.trim('"', ' ') }.filter { it.isNotBlank() }
+        return try {
+            val obj = JSONObject(json)
+            val arr = obj.optJSONArray("ids") ?: return emptyList()
+            val list = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                list.add(arr.getString(i))
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun parseAckedId(json: String): String? {
-        val key = "\"ackedId\":\""
-        val start = json.indexOf(key)
-        if (start < 0) return null
-        val idStart = start + key.length
-        val idEnd = json.indexOf('"', idStart)
-        return if (idEnd > idStart) json.substring(idStart, idEnd) else null
-    }
-
-    private fun parseJsonField(json: String, key: String): String? {
-        val searchKey = "\"$key\":\""
-        val start = json.indexOf(searchKey)
-        if (start < 0) return null
-        val valStart = start + searchKey.length
-        val valEnd = json.indexOf('"', valStart)
-        return if (valEnd > valStart) json.substring(valStart, valEnd) else null
-    }
-
-    private fun parseJsonDouble(json: String, key: String): Double? {
-        val searchKey = "\"$key\":"
-        val start = json.indexOf(searchKey)
-        if (start < 0) return null
-        val valStart = start + searchKey.length
-        val comma = json.indexOf(',', valStart)
-        val brace = json.indexOf('}', valStart)
-        val end = when {
-            comma > 0 && brace > 0 -> minOf(comma, brace)
-            comma > 0 -> comma
-            brace > 0 -> brace
-            else -> json.length
+        return try {
+            val obj = JSONObject(json)
+            obj.optString("ackedId").takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
         }
-        return json.substring(valStart, end).trim().toDoubleOrNull()
-    }
-
-    private fun parseJsonLong(json: String, key: String): Long? {
-        val searchKey = "\"$key\":"
-        val start = json.indexOf(searchKey)
-        if (start < 0) return null
-        val valStart = start + searchKey.length
-        val comma = json.indexOf(',', valStart)
-        val brace = json.indexOf('}', valStart)
-        val end = when {
-            comma > 0 && brace > 0 -> minOf(comma, brace)
-            comma > 0 -> comma
-            brace > 0 -> brace
-            else -> json.length
-        }
-        return json.substring(valStart, end).trim().toLongOrNull()
     }
 
     private fun parseDeviceModel(endpointName: String): String {
@@ -357,12 +496,20 @@ class NearbyConnectionsManager @Inject constructor(
         endpointId.take(6).uppercase()
 
     fun stopAll() {
-        Nearby.getConnectionsClient(context).apply {
-            stopAdvertising()
-            stopDiscovery()
-            stopAllEndpoints()
+        try {
+            periodicSyncJob?.cancel()
+            Nearby.getConnectionsClient(context).apply {
+                stopAdvertising()
+                stopDiscovery()
+                stopAllEndpoints()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "stopAll hatası: ${e.message}")
         }
         activeConnections.clear()
+        connectingEndpoints.clear()
+        isAdvertising = false
+        isDiscovering = false
         _connectedPeerCount.value = 0
         Log.i(TAG, "Nearby Connections durduruldu.")
     }
@@ -370,21 +517,24 @@ class NearbyConnectionsManager @Inject constructor(
     private fun showEmergencyNotification(model: String, msg: String, lat: Double, lon: Double) {
         try {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-            val channelId = "nearby_emergency_alerts_v1"
+            val channelId = "afet_emergency_alerts_v3"
 
             val channel = android.app.NotificationChannel(
                 channelId,
-                "Çevredeki Acil Durumlar",
+                "Çevredeki Acil Durumlar (SOS)",
                 android.app.NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Yakındaki cihazlardan gelen SOS bildirimleri"
+                description = "Yakındaki cihazlardan gelen acil durum bildirimleri"
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 200, 500)
+                vibrationPattern = longArrayOf(0, 600, 200, 600)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                enableLights(true)
+                lightColor = android.graphics.Color.RED
             }
             notificationManager.createNotificationChannel(channel)
 
             val intent = Intent(context, org.afet.mesh.ui.SosDashboardActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
             val pendingIntent = android.app.PendingIntent.getActivity(
                 context, 0, intent,
@@ -398,12 +548,24 @@ class NearbyConnectionsManager @Inject constructor(
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
+                .setPriority(android.app.Notification.PRIORITY_MAX)
+                .setCategory(android.app.Notification.CATEGORY_ALARM)
                 .build()
 
-            notificationManager.notify((System.currentTimeMillis() % 100000).toInt(), notification)
-            Log.i(TAG, "🔔 Acil durum bildirimi gönderildi: $model - $msg")
+            val notifId = (System.currentTimeMillis() % 100000).toInt()
+            notificationManager.notify(notifId, notification)
+            Log.i(TAG, "🔔 Acil durum bildirimi gösterildi: $model - $msg (ID: $notifId)")
+
+            // Ses / Titreşim donanımını doğrudan uyar
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                vibrator?.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 500, 200, 500), -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(longArrayOf(0, 500, 200, 500), -1)
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Bildirim gösterilemedi: ${e.message}")
+            Log.e(TAG, "Bildirim gösterilemedi: ${e.message}", e)
         }
     }
 }

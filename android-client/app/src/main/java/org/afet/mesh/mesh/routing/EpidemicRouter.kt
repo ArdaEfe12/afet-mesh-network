@@ -61,7 +61,17 @@ class EpidemicRouter @Inject constructor(
      * karşı cihazın bilmediği paketleri döndürür (aktarılacaklar).
      */
     suspend fun getPacketsToSendToPeer(peerKnownIds: List<String>): List<MessageEntity> =
-        messageDao.getPacketsToSync(peerKnownIds)
+        if (peerKnownIds.isEmpty()) {
+            messageDao.getAllPendingPacketsToSync()
+        } else {
+            messageDao.getPacketsToSync(peerKnownIds)
+        }
+
+    /**
+     * Yeni bir bağlantı kurulduğunda bekleyen tüm paketleri doğrudan aktarmak için.
+     */
+    suspend fun getAllPendingPackets(): List<MessageEntity> =
+        messageDao.getAllPendingPacketsToSync()
 
     /**
      * Karşı cihazdan alınan ham ikili paketi işler:

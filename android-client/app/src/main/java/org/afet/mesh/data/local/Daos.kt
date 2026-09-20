@@ -43,16 +43,28 @@ interface MessageDao {
     /**
      * Karşı cihaza aktarılacak paketleri belirle.
      * Karşı cihazın bilmediği (listede olmayan ID'ler) ve TTL > 0 olanlar.
-     * Limit: Tek bir karşılaşmada en fazla 5 paket aktar (BLE bant genişliği koruması).
+     * Limit: Tek bir karşılaşmada en fazla 10 paket aktar (BLE/Wi-Fi Direct aktarımı).
      */
     @Query("""
         SELECT * FROM pending_messages
         WHERE is_acked = 0 AND ttl > 0
         AND messageId NOT IN (:knownIds)
         ORDER BY priority ASC
-        LIMIT 5
+        LIMIT 10
     """)
     suspend fun getPacketsToSync(knownIds: List<String>): List<MessageEntity>
+
+    /**
+     * Karşı cihazın envanteri boş olduğunda (yeni cihaz / hiç paket almamış)
+     * bekleyen tüm paketleri aktar.
+     */
+    @Query("""
+        SELECT * FROM pending_messages
+        WHERE is_acked = 0 AND ttl > 0
+        ORDER BY priority ASC, timestamp_epoch ASC
+        LIMIT 10
+    """)
+    suspend fun getAllPendingPacketsToSync(): List<MessageEntity>
 
     /**
      * Tüm bekleyen mesaj ID'lerini döndür (Anti-Entropy Digest için).

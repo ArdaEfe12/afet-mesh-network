@@ -61,9 +61,34 @@ class SosViewModel @Inject constructor(
     val deviceModel: String =
         "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}"
 
+    private val _isBluetoothEnabled = MutableStateFlow(true)
+    val isBluetoothEnabled: StateFlow<Boolean> = _isBluetoothEnabled
+
+    private val _isLocationEnabled = MutableStateFlow(true)
+    val isLocationEnabled: StateFlow<Boolean> = _isLocationEnabled
+
     init {
         startLocationUpdates()
         syncBattery()
+        checkHardwareStatus()
+        startMesh()
+    }
+
+    fun startMesh() {
+        nearbyManager.startMesh()
+    }
+
+    fun checkHardwareStatus() {
+        try {
+            val bm = getApplication<Application>().getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
+            _isBluetoothEnabled.value = bm?.adapter?.isEnabled == true
+
+            val lm = getApplication<Application>().getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            _isLocationEnabled.value = lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true ||
+                                       lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+        } catch (e: Exception) {
+            Log.w("SosViewModel", "Donanım durum kontrolü hatası: ${e.message}")
+        }
     }
 
     fun toggleSos() {
@@ -113,7 +138,10 @@ class SosViewModel @Inject constructor(
             messageText = message
         )
 
-        Log.i("SosViewModel", "🚨 SOS kuyruğa eklendi: $messageId ($deviceModel)")
+        // 🚨 ÇOK ÖNEMLİ: Paketi bağlı olan tüm komşu cihazlara anında fırlat!
+        nearbyManager.broadcastPacket(messageId, rawProto)
+
+        Log.i("SosViewModel", "🚨 SOS kuyruğa eklendi ve anında yayınlandı: $messageId ($deviceModel)")
     }
 
     private fun startLocationUpdates() {

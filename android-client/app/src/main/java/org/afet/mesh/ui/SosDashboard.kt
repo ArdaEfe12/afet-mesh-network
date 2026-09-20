@@ -58,6 +58,8 @@ fun SosDashboard(
     deliveredCount: Int,
     nearbyEmergencies: List<org.afet.mesh.data.local.MessageEntity> = emptyList(),
     localDeviceModel: String = "",
+    isBluetoothEnabled: Boolean = true,
+    isLocationEnabled: Boolean = true,
     onSosToggle: () -> Unit,
     onAddMessage: (String) -> Unit
 ) {
@@ -111,7 +113,42 @@ fun SosDashboard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            // Donanım uyarısı (Bluetooth veya Konum kapalı ise)
+            if (!isBluetoothEnabled || !isLocationEnabled) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AfetColors.CriticalOrange.copy(alpha = 0.15f))
+                        .border(1.dp, AfetColors.CriticalOrange, RoundedCornerShape(10.dp))
+                        .padding(12.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "⚠️ DONANIM UYARISI",
+                            color = AfetColors.CriticalOrange,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.W800,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val warning = when {
+                            !isBluetoothEnabled && !isLocationEnabled -> "Cihazlar arası mesh iletişimi için hem Bluetooth hem Konum (GPS) açılmalıdır!"
+                            !isBluetoothEnabled -> "Cihazları bulmak ve mesaj iletmek için lütfen Bluetooth'u açın!"
+                            else -> "Cihaz keşfi ve acil konum tespiti için lütfen Konum (GPS) servisini açın!"
+                        }
+                        Text(
+                            text = warning,
+                            color = AfetColors.TextPrimary,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             // ── Durum Kartları (Pil, Bağlı Cihaz, Kuyruk) ─────────
             Row(
