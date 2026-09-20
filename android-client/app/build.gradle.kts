@@ -2,6 +2,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.compose.compiler)
     alias(libs.plugins.protobuf)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
@@ -43,11 +44,6 @@ android {
 
     kotlinOptions {
         jvmTarget = "21"
-    }
-
-    // Compose derleyici sürümü (Kotlin 2.1+ ile uyumlu)
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.15"
     }
 }
 
