@@ -16,18 +16,20 @@ class SosDashboardActivity : ComponentActivity() {
 
     private val viewModel: SosViewModel by viewModels()
 
+    private val permissionLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        android.util.Log.i("SosDashboardActivity", "İzinler sonuçlandı: $permissions")
+        startMeshService()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Ekran her zaman açık kalsın — kazazede elinden bırakmış olabilir
-        // (DutyCycleManager zaten pilin kritik olduğunda bunu devre dışı bırakır)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Mesh servisini başlat
-        Intent(this, MeshForegroundService::class.java).apply {
-            action = MeshForegroundService.ACTION_START
-            startForegroundService(this)
-        }
+        requestMeshPermissions()
+        startMeshService()
 
         setContent {
             val isSosActive by viewModel.isSosActive.collectAsState()
@@ -54,4 +56,33 @@ class SosDashboardActivity : ComponentActivity() {
             )
         }
     }
+
+    private fun startMeshService() {
+        try {
+            Intent(this, MeshForegroundService::class.java).apply {
+                action = MeshForegroundService.ACTION_START
+                startForegroundService(this)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SosDashboardActivity", "Servis başlatılamadı: ${e.message}")
+        }
+    }
+
+    private fun requestMeshPermissions() {
+        val permissions = mutableListOf(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            permissions.add(android.Manifest.permission.BLUETOOTH_SCAN)
+            permissions.add(android.Manifest.permission.BLUETOOTH_ADVERTISE)
+            permissions.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
+            permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        permissionLauncher.launch(permissions.toTypedArray())
+    }
 }
+

@@ -14,21 +14,23 @@
 
     <!-- Bluetooth (API 31+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="s" />
 
-    <!-- Wi-Fi Direct / Wi-Fi Aware (Nearby Connections API büyük paketleri burada aktarır) -->
+    <!-- Wi-Fi Direct / Wi-Fi Aware -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
+
+    <!-- Bildirim ve Titreşim İzinleri (API 33+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Konum (BLE Scan için zorunlu — Android 9 ve altında) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

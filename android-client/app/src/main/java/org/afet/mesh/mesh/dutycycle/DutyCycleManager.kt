@@ -83,30 +83,13 @@ class DutyCycleManager @Inject constructor(
     private fun startDutyCycle() {
         cycleJob?.cancel()
         cycleJob = scope.launch {
-            while (isActive) {
-                val p = currentProfile
-                Log.d(TAG, "▶ Reklam başladı (${p.advDurationMs}ms) — ${p.name}")
-
-                nearbyManager.startAdvertising()
-                delay(p.advDurationMs.toLong())
-                nearbyManager.stopAll()
-
-                if (p.scanIntervalMs > 0) {
-                    delay((p.advIntervalMs - p.advDurationMs).coerceAtLeast(0).toLong())
-                    Log.d(TAG, "▶ Tarama başladı (${p.scanDurationMs}ms)")
-                    nearbyManager.startDiscovery()
-                    delay(p.scanDurationMs.toLong())
-                    nearbyManager.stopAll()
-                    delay((p.scanIntervalMs - p.scanDurationMs).coerceAtLeast(0).toLong())
-                } else {
-                    delay(p.advIntervalMs.toLong())
-                }
-            }
+            Log.i(TAG, "▶ Mesh antenleri aktif ediliyor (Advertising + Discovery): ${currentProfile.name}")
+            nearbyManager.startAdvertising()
+            nearbyManager.startDiscovery()
         }
     }
 
     private fun restartDutyCycle() {
-        nearbyManager.stopAll()
         startDutyCycle()
     }
 

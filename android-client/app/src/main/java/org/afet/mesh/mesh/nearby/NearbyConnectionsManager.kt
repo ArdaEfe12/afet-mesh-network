@@ -1,6 +1,7 @@
 package org.afet.mesh.mesh.nearby
 
 import android.content.Context
+import android.content.Intent
 import android.util.Log
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
@@ -241,7 +242,7 @@ class NearbyConnectionsManager @Inject constructor(
                     val lon = parseJsonDouble(payloadStr, "lon") ?: 0.0
                     val time = parseJsonLong(payloadStr, "time") ?: System.currentTimeMillis()
 
-                    epidemicRouter.receivePacket(
+                    val isNew = epidemicRouter.receivePacket(
                         messageId = msgId,
                         rawProtoBytes = payloadBytes,
                         priority = 1,
@@ -254,6 +255,10 @@ class NearbyConnectionsManager @Inject constructor(
                         senderDeviceModel = model,
                         messageText = msg
                     )
+
+                    if (isNew) {
+                        showEmergencyNotification(model, msg, lat, lon)
+                    }
                 }
             }
 
@@ -357,7 +362,48 @@ class NearbyConnectionsManager @Inject constructor(
             stopDiscovery()
             stopAllEndpoints()
         }
-        scope.cancel()
+        activeConnections.clear()
+        _connectedPeerCount.value = 0
         Log.i(TAG, "Nearby Connections durduruldu.")
+    }
+
+    private fun showEmergencyNotification(model: String, msg: String, lat: Double, lon: Double) {
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            val channelId = "nearby_emergency_alerts_v1"
+
+            val channel = android.app.NotificationChannel(
+                channelId,
+                "Çevredeki Acil Durumlar",
+                android.app.NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Yakındaki cihazlardan gelen SOS bildirimleri"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500)
+            }
+            notificationManager.createNotificationChannel(channel)
+
+            val intent = Intent(context, org.afet.mesh.ui.SosDashboardActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                context, 0, intent,
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val locStr = if (lat != 0.0 || lon != 0.0) " (📍 %.4f, %.4f)".format(lat, lon) else ""
+            val notification = android.app.Notification.Builder(context, channelId)
+                .setContentTitle("🚨 YAKINDA ACİL DURUM: $model")
+                .setContentText("$msg$locStr")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            notificationManager.notify((System.currentTimeMillis() % 100000).toInt(), notification)
+            Log.i(TAG, "🔔 Acil durum bildirimi gönderildi: $model - $msg")
+        } catch (e: Exception) {
+            Log.e(TAG, "Bildirim gösterilemedi: ${e.message}")
+        }
     }
 }
