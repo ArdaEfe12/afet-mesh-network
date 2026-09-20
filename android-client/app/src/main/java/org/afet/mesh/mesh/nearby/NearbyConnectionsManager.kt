@@ -53,8 +53,12 @@ class NearbyConnectionsManager @Inject constructor(
     val deviceModelName: String =
         "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}"
 
-    // BLE reklam paketi boyutuna sığması için en fazla 32 karakter
-    val endpointDisplayName: String = "$deviceModelName ($localNodeId)".take(32)
+    // BLE 4.2 standart reklam paketine (31 bayt) doğrudan sığacak kompakt kimlik (en fazla 17 karakter)
+    // Böylece Extended BLE beklemeden internetsiz/çevrimdışı ortamda en hızlı keşif sağlanır
+    val endpointDisplayName: String = run {
+        val cleanModel = deviceModelName.replace(" ", "").take(10)
+        "${cleanModel}_${localNodeId.take(4)}"
+    }.take(17)
 
     // Aktif ve süreçteki bağlantıların güvenli takibi
     private val activeConnections = ConcurrentHashMap<String, PeerEntity>()
@@ -196,9 +200,9 @@ class NearbyConnectionsManager @Inject constructor(
                 }
             } else {
                 Log.i(TAG, "⏳ Karşı cihazın bağlanması bekleniyor ($myName <= $otherName) → $endpointId")
-                // Fallback: 4 saniye içinde karşıdan bağlantı gelmezse biz deneriz
+                // Fallback: 2 saniye içinde karşıdan bağlantı gelmezse biz deneriz
                 scope.launch {
-                    delay(4000)
+                    delay(2000)
                     if (!activeConnections.containsKey(endpointId) && connectingEndpoints.add(endpointId)) {
                         Log.i(TAG, "⏱️ Fallback süresi doldu, biz bağlanıyoruz: $endpointId")
                         Nearby.getConnectionsClient(context).requestConnection(
@@ -232,6 +236,7 @@ class NearbyConnectionsManager @Inject constructor(
         if (isAdvertising) return
         val advertisingOptions = AdvertisingOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
+            .setLowPower(false)
             .build()
 
         Nearby.getConnectionsClient(context).startAdvertising(
@@ -255,6 +260,7 @@ class NearbyConnectionsManager @Inject constructor(
         if (isDiscovering) return
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
+            .setLowPower(false)
             .build()
 
         Nearby.getConnectionsClient(context).startDiscovery(
@@ -482,11 +488,10 @@ class NearbyConnectionsManager @Inject constructor(
 
     private fun parseDeviceModel(endpointName: String): String {
         val parenIdx = endpointName.lastIndexOf('(')
-        return if (parenIdx > 0) {
-            endpointName.substring(0, parenIdx).trim()
-        } else {
-            endpointName.ifBlank { "Bilinmeyen Cihaz" }
-        }
+        if (parenIdx > 0) return endpointName.substring(0, parenIdx).trim()
+        val underIdx = endpointName.lastIndexOf('_')
+        if (underIdx > 0) return endpointName.substring(0, underIdx).trim()
+        return endpointName.ifBlank { "Bilinmeyen Cihaz" }
     }
 
     private fun generateShortNodeId(): String =
