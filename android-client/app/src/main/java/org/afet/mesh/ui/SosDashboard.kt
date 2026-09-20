@@ -199,7 +199,109 @@ fun SosDashboard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ── Hızlı Durum Butonları ───────────────────────────────
+            Text(
+                text = "HIZLI DURUM BİLDİRİMİ",
+                color = AfetColors.TextMuted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.W600,
+                letterSpacing = 1.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val quickChips = listOf(
+                "Enkaz Altındayım" to "🚨",
+                "Yaralı Var" to "🩹",
+                "2 Kişiyiz" to "👥",
+                "Mahsur Kaldık" to "⚠️",
+                "Güvendeyim" to "✅"
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                quickChips.forEach { (text, emoji) ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(AfetColors.Surface)
+                            .border(1.dp, AfetColors.SurfaceAlt, RoundedCornerShape(20.dp))
+                            .clickable { onAddMessage("$emoji $text") }
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "$emoji $text",
+                            color = AfetColors.TextPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.W500
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // ── Özel Mesaj Giriş Alanı ──────────────────────────────
+            var customText by remember { mutableStateOf("") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = customText,
+                    onValueChange = { customText = it },
+                    placeholder = {
+                        Text(
+                            text = "Kat, oda, durum notu yazın...",
+                            color = AfetColors.TextMuted,
+                            fontSize = 13.sp
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = AfetColors.TextPrimary,
+                        unfocusedTextColor = AfetColors.TextPrimary,
+                        focusedContainerColor = AfetColors.Surface,
+                        unfocusedContainerColor = AfetColors.Surface,
+                        focusedBorderColor = AfetColors.SosRed,
+                        unfocusedBorderColor = AfetColors.SurfaceAlt,
+                        cursorColor = AfetColors.SosRed
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true
+                )
+
+                Button(
+                    onClick = {
+                        if (customText.isNotBlank()) {
+                            onAddMessage(customText.trim())
+                            customText = ""
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AfetColors.SosRed,
+                        contentColor = AfetColors.TextPrimary
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    enabled = customText.isNotBlank()
+                ) {
+                    Text(
+                        text = "Gönder",
+                        fontWeight = FontWeight.W700,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
 
             // ── Konum Bilgisi ───────────────────────────────────────
             if (lastKnownLocation.isNotBlank()) {
